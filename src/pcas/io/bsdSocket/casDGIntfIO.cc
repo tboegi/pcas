@@ -28,14 +28,27 @@
 #include "casDGIntfIO.h"
 #include "ipIgnoreEntry.h"
 
+/*
+ * EPICS base with IPv6 support has e.g. osiSockAddr46 in the "node"
+ * Note: We don't support IPv6 in this module yet
+ */
+#ifdef EPICS_BASE_HAS_OSISOCKADDR46
+#define ADDR46 addr46
+#define PNODE_ADDR pNode->addr46
+#else
+#define ADDR46 addr
+#define osiSockAddr46 osiSockAddr
+#define PNODE_ADDR pNode->addr
+#endif
+
 static void  forcePort (ELLLIST *pList, unsigned short port)
 {
     osiSockAddrNode *pNode;
 
     pNode  = reinterpret_cast < osiSockAddrNode * > ( ellFirst ( pList ) );
     while ( pNode ) {
-        if ( pNode->addr.sa.sa_family == AF_INET ) {
-            pNode->addr.ia.sin_port = htons (port);
+        if ( PNODE_ADDR.sa.sa_family == AF_INET ) {
+            PNODE_ADDR.ia.sin_port = htons (port);
         }
         pNode = reinterpret_cast < osiSockAddrNode * > ( ellNext ( &pNode->node ) );
     }
@@ -47,8 +60,8 @@ casDGIntfIO::casDGIntfIO ( caServerI & serverIn, clientBufMemoryManager & memMgr
     casDGClient ( serverIn, memMgr )
 {
     ELLLIST BCastAddrList;
-    osiSockAddr serverAddr;
-    osiSockAddr serverBCastAddr;
+    osiSockAddr46 serverAddr;
+    osiSockAddr46 serverBCastAddr;
     unsigned short beaconPort;
     int status;
     
@@ -128,7 +141,7 @@ casDGIntfIO::casDGIntfIO ( caServerI & serverIn, clientBufMemoryManager & memMgr
             throw S_cas_noInterface;
         }
         pAddr = reinterpret_cast < osiSockAddrNode * > ( ellFirst ( &BCastAddrList ) );
-        serverBCastAddr.ia = pAddr->addr.ia; 
+        serverBCastAddr.ia = pAddr->ADDR46.ia; 
         serverBCastAddr.ia.sin_port = htons (this->dgPort);
 
         if ( ! autoBeaconAddr ) {
@@ -170,9 +183,9 @@ casDGIntfIO::casDGIntfIO ( caServerI & serverIn, clientBufMemoryManager & memMgr
         while ( ELLNODE * pRawNode  = ellGet ( & filtered ) ) {
 		    STATIC_ASSERT ( offsetof (osiSockAddrNode, node) == 0 );
 		    osiSockAddrNode * pNode = reinterpret_cast < osiSockAddrNode * > ( pRawNode );
-            if ( pNode->addr.sa.sa_family == AF_INET ) {
+            if ( PNODE_ADDR.sa.sa_family == AF_INET ) {
                 ipIgnoreEntry * pIPI = new ( this->ipIgnoreEntryFreeList )
-                                ipIgnoreEntry ( pNode->addr.ia.sin_addr.s_addr );
+                                ipIgnoreEntry ( PNODE_ADDR.ia.sin_addr.s_addr );
                 this->ignoreTable.add ( * pIPI );
             }
             else {
@@ -412,15 +425,15 @@ void casDGIntfIO::sendBeaconIO ( char & msg, unsigned length,
 
     portField = inetAddr.sin_port; // the TCP port
 
-    for (ELLNODE *pNode = ellFirst(&this->beaconAddrList); pNode; pNode = ellNext(pNode))
+    for (ELLNODE *pTmpNode = ellFirst(&this->beaconAddrList); pTmpNode; pTmpNode = ellNext(pTmpNode))
     {
-        osiSockAddrNode	*pAddr = reinterpret_cast<osiSockAddrNode *>(pNode);
+        osiSockAddrNode *pNode = reinterpret_cast<osiSockAddrNode *>(pTmpNode);
 
-        ssize_t status = sendto(this->beaconSock, &msg, length, 0, &pAddr->addr.sa, sizeof(pAddr->addr.ia));
+        ssize_t status = sendto(this->beaconSock, &msg, length, 0, &PNODE_ADDR.sa, sizeof(PNODE_ADDR.ia));
         if ( status != length ) {
             char sockErrBuf[64], buf[64];
             epicsSocketConvertErrnoToString ( sockErrBuf, sizeof ( sockErrBuf ) );
-            ipAddrToA ( &pAddr->addr.ia, buf, sizeof(buf) );
+            ipAddrToA ( &PNODE_ADDR.ia, buf, sizeof(buf) );
             errlogPrintf ( "%s: CA beacon (send to \"%s\") error was \"%s\" (%u)\n",
                 __FILE__, buf, sockErrBuf, (unsigned)status );
         }
